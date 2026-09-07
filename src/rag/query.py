@@ -13,7 +13,8 @@ from config import (
     EMBEDDING_MODEL,
     OLLAMA_URL,
     OLLAMA_MODEL,
-    TOP_K
+    TOP_K,
+    VECTOR_TOP_K,
 )
 
 model = SentenceTransformer(EMBEDDING_MODEL)
@@ -73,21 +74,29 @@ def _ensure_index_exists():
 _ensure_index_exists()
 
 
-def retrieve(query: str):
-    """Retrieve relevant chunks for a query."""
-    # Ensure index exists before retrieving
+def vector_search(query: str, top_k: int = VECTOR_TOP_K):
+    """Vector similarity search. Returns chunk dicts ranked best-first.
+
+    Out-of-range ids (FAISS returns -1 when the index has fewer than `top_k`
+    vectors) are skipped instead of wrapping around to `chunks[-1]`.
+    """
     if index is None or len(chunks) == 0:
         if not _ensure_index_exists():
             return []
-    
+
     if index is None or len(chunks) == 0:
         return []
-    
+
     q_emb = model.encode([query])
     faiss.normalize_L2(q_emb)
 
-    scores, ids = index.search(q_emb, TOP_K)
-    return [chunks[i] for i in ids[0]]
+    scores, ids = index.search(q_emb, top_k)
+    return [chunks[i] for i in ids[0] if 0 <= i < len(chunks)]
+
+
+def retrieve(query: str):
+    """Backward-compatible vector retrieval (top ``TOP_K`` chunks)."""
+    return vector_search(query, TOP_K)
 
 
 def build_prompt(query, contexts):
@@ -132,10 +141,18 @@ def ask_llm(prompt):
         json={
             "model": OLLAMA_MODEL,
             "prompt": prompt,
-            "stream": False
+            "stream": False,
+            "think": False
         }
     )
-    return response.json()["response"]
+    data = response.json()
+    if "response" not in data:
+        # Ollama returns {"error": "..."} for e.g. a model that isn't pulled.
+        raise RuntimeError(
+            f"Ollama did not return a response for model '{OLLAMA_MODEL}': "
+            f"{data.get('error', data)}"
+        )
+    return data["response"]
 
 
 def ask(query: str):

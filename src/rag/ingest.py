@@ -36,18 +36,19 @@ def ingest_documents():
         print(f"Warning: Documents directory {DOCUMENTS_DIR} does not exist")
         return documents
 
+    # rglob already walks the whole tree; skip directories and unsupported files.
     for path in base_dir.rglob("*"):
-        if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
-            print(f"Loading: {path}")
-            try:
-                documents.append({
-                    "path": str(path),
-                    "text": load_document(path)
-                })
-            except Exception as e:
-                print(f"Error loading {path}: {e}")
-        else:
-            [documents.append(doc) for doc in ingest_documents(path)]
+        if not (path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS):
+            continue
+
+        print(f"Loading: {path}")
+        try:
+            documents.append({
+                "path": str(path),
+                "text": load_document(path)
+            })
+        except Exception as e:
+            print(f"Error loading {path}: {e}")
 
     return documents
 
