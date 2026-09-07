@@ -14,7 +14,8 @@ Users → Search → Answer = 😫
 
 A **local, intelligent Q&A system** using:
 
-- **RAG**: Semantic search over documentation
+- **Hybrid RAG**: Vector (FAISS) **+** full-text (BM25) search, merged with RRF
+- **Query Expansion**: LLM extracts keywords before the search runs
 - **MCP**: Dynamic document access
 - **Local LLM**: Privacy-preserving answers (Ollama)
 
@@ -22,7 +23,8 @@ A **local, intelligent Q&A system** using:
 
 - ✅ Privacy-first (runs locally)
 - ✅ No API costs
-- ✅ Fast semantic search
+- ✅ Hybrid search — semantic recall **and** exact-term precision
+- ✅ Robust to rare terms, abbreviations, file/command names
 - ✅ Intelligent document access
 - ✅ Complete data control
 
@@ -33,10 +35,13 @@ A **local, intelligent Q&A system** using:
 │   User Interface     │ (CLI)
 └──────────┬───────────┘
            │
+           ▼
+   [Query Expansion]  (LLM → keywords)
+           │
      ┌─────┴─────┐
      ▼           ▼
-  [RAG]       [MCP]
-   Query      Tools
+ [Hybrid RAG]  [MCP]
+ Vector+BM25   Tools
      │           │
      └─────┬─────┘
            ▼
@@ -46,34 +51,37 @@ A **local, intelligent Q&A system** using:
 # 🏗️ Architecture - Storage
 
 ```
-┌────────────────┐
-│  FAISS Index   │ Vector Database
-│  + MCP Tools   │
-└────────┬───────┘
-         │
-    ┌────▼─────┐
-    │   docs/  │
-    │directory │
-    └──────────┘
+┌────────────────┐   ┌────────────────┐
+│  FAISS Index   │   │   BM25 Index   │
+│ (vectors,disk) │   │ (in-memory)    │
+└────────┬───────┘   └────────┬───────┘
+         │                    │
+         └─────────┬──────────┘
+              ┌────▼─────┐
+              │   docs/  │  (recursive: .md .txt .pdf .docx)
+              └──────────┘
+       + MCP tools read docs/ directly
 ```
 
-# 🔍 RAG Pipeline
+# 🔍 Hybrid RAG Pipeline
 
-1. Document Loading → Read .md, .txt, .pdf, .docx
-2. Chunking → Split into 700-char chunks
-3. Embedding → Use SentenceTransformers
-4. Indexing → Build FAISS vector index
-5. Query → Retrieve top 5 similar chunks
-6. Prompt Building → Create context-aware prompt
-7. LLM Generation → Get answer from model
+1. Document Loading → Read .md, .txt, .pdf, .docx (recursively)
+2. Chunking → Split into 700-token chunks (overlap 100)
+3. Embedding → SentenceTransformers → FAISS vector index
+4. Indexing → BM25 index built in-memory from the same chunks
+5. **Query Expansion** → LLM extracts 3–6 keywords (temperature 0)
+6. **Parallel search** → vector (FAISS) ∥ full-text (BM25), 10 hits each
+7. **Fusion** → Reciprocal Rank Fusion → Top-5 chunks
+8. Prompt Building → Create context-aware prompt
+9. LLM Generation → Get answer from model
 
-# 🔍 Why FAISS?
+# 🔍 Why Hybrid (Vector + BM25)?
 
-- Fast vector similarity search
-- Lightweight and memory-efficient
-- No external dependencies
-- Perfect for local deployments
-- Millions of vectors supported
+- Vectors capture **meaning**; BM25 captures **exact tokens**
+- Small local models + embeddings miss rare terms and acronyms
+- BM25 nails file names, commands, error codes, abbreviations
+- RRF needs no score calibration between the two retrievers
+- Parallel execution → latency ≈ max(vector, BM25), not the sum
 
 # 🔧 MCP - Model Context Protocol
 
@@ -98,6 +106,7 @@ search_documents(query)
 ```
 Language:      Python 3.10+
 Vector DB:     FAISS
+Full-text:     rank-bm25 (BM25Okapi)
 Embeddings:    SentenceTransformers
 LLM:           Ollama (local)
 MCP:           FastMCP
@@ -110,12 +119,17 @@ src/
 ├── config.py           Configuration
 ├── main.py             CLI entry point
 ├── assistant.py        Main orchestrator
+├── bench.py            Vector-only vs hybrid benchmark
 ├── rag/
-│   ├── ingest.py      Load documents
+│   ├── ingest.py      Load documents (recursive)
 │   ├── chunk.py       Split text
 │   ├── embed.py       Generate embeddings
 │   ├── build_index.py Build FAISS index
-│   └── query.py       Retrieve & generate
+│   ├── query.py       Vector search + generate
+│   ├── expand.py      LLM query expansion (+ fallback)
+│   ├── fts.py         BM25 full-text search
+│   ├── fusion.py      Reciprocal Rank Fusion
+│   └── hybrid.py      Orchestrates expand → parallel search → RRF
 ├── mcp/
 │   ├── server.py      MCP tool definitions
 │   └── client.py      MCP client wrapper
@@ -143,27 +157,46 @@ $ python main.py build-index
 ```
 User Question
   ↓
-Embed question
+LLM Query Expansion → keywords (or [] on failure)
   ↓
-Search FAISS → Top 5 chunks
+┌───────────────┬───────────────┐
+▼               ▼               │  run in parallel
+Vector search   BM25 search     │  (ThreadPoolExecutor)
+(FAISS, 10)     (rank-bm25, 10) │
+└───────┬───────┴───────────────┘
+        ▼
+Reciprocal Rank Fusion → Top 5 chunks
   ↓
 LLM decides: Use MCP tools?
   ↓
-Build prompt + context
+Build prompt + context (+ MCP result)
   ↓
 Call Ollama
   ↓
 Return answer + sources
 ```
 
+# 🔀 Hybrid Fusion — RRF
+
+```python
+# Reciprocal Rank Fusion over the two ranked lists
+RRF_Score(d) = Σ  1 / (k + rank_m(d))     # k = 60, rank starts at 1
+```
+
+- Each retriever contributes `1/(k+rank)` per document
+- Documents found by **both** retrievers rise to the top
+- No need to normalise FAISS cosine vs BM25 scores
+
 # ✨ Core Features
 
-- **Semantic Search**: Find by meaning, not keywords
-- **Multi-format**: .md, .txt, .pdf, .docx files
+- **Hybrid Search**: Vector meaning + BM25 exact tokens
+- **Query Expansion**: LLM keywords sharpen the search
+- **Parallel Retrieval**: FTS adds accuracy, not latency
+- **Graceful Fallback**: Bad LLM output / missing index → raw query, no crash
+- **Multi-format**: .md, .txt, .pdf, .docx files (recursive)
 - **Source Attribution**: Shows document sources
 - **MCP Tools**: LLM can read full documents
 - **No External APIs**: Runs locally only
-- **Fast Retrieval**: Sub-second search
 
 # ⚙️ Configuration Options
 
@@ -171,8 +204,20 @@ Return answer + sources
 CHUNK_SIZE = 700
 CHUNK_OVERLAP = 100
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-OLLAMA_MODEL = "qwen3:0.6b"
-TOP_K = 5
+OLLAMA_MODEL = "qwen3:1.7b"   # any local Qwen 0.6B–3B
+
+TOP_K = 5                     # final chunks after fusion
+
+# Hybrid search
+ENABLE_HYBRID = True          # False → plain vector search
+VECTOR_TOP_K = 10             # vector hits before fusion
+FTS_TOP_K = 10               # BM25 hits before fusion
+RRF_K = 60                    # RRF constant k
+
+# Query expansion
+QUERY_EXPANSION_ENABLED = True
+EXPANSION_TEMPERATURE = 0.0   # deterministic keywords
+EXPANSION_MAX_KEYWORDS = 6
 ```
 
 # 🎬 Live Demo - Starting
@@ -242,22 +287,38 @@ Type 'exit' to stop
 # ⚡ Performance Benchmarks
 
 ```
-Index Building:   ~30s (one-time)
-Query Embedding:  ~50ms
-FAISS Search:     ~5ms
-LLM Generation:   2-5s
-Total Cycle:      2-6s
+Index Building:    ~30s (one-time)
+Query Expansion:   0.3-1.5s (LLM keyword call)
+Vector ∥ BM25:     ~50ms  (run in parallel)
+RRF Fusion:        <1ms
+LLM Generation:    2-5s
+Total Cycle:       3-8s
 ```
+
+# 📊 Before / After
+
+`Results.png` — same question, `ENABLE_HYBRID` off vs on:
+
+| | Vector-only | Hybrid (expansion + BM25 + RRF) |
+|---|---|---|
+| Top source | wrong doc (`QA Lead.md`) | correct doc (`Documentation Lead (Docs).md`) |
+| Answer | generic, off-topic | grounded in the right role doc |
+
+Run your own: `python bench.py` → recall@k / precision@k / MRR.
 
 # ⚡ Tuning for Speed
 
 ```python
-# Faster (smaller model):
-OLLAMA_MODEL = "qwen3:0.6b"
+# Skip the extra LLM call:
+QUERY_EXPANSION_ENABLED = False
+
+# Drop back to plain vector search:
+ENABLE_HYBRID = False
 
 # Faster retrieval:
 TOP_K = 3
-CHUNK_SIZE = 500
+VECTOR_TOP_K = 5
+FTS_TOP_K = 5
 ```
 
 # 🚢 Deployment - Single Machine
@@ -324,39 +385,44 @@ Docs     Index      Build
 
 # 📊 Why This Works
 
-| Aspect | Traditional | Our RAG |
+| Aspect | Traditional | Our Hybrid RAG |
 |--------|---|---|
-| **Understanding** | Keywords | Semantic |
+| **Understanding** | Keywords | Semantic **+** lexical |
+| **Rare terms** | Hit or miss | BM25 catches them |
 | **Answers** | Documents | Direct |
 | **Privacy** | Cloud | Local |
 | **Cost** | Subscription | One-time |
-| **Speed** | Slow | Sub-second |
 
 # ✅ What You Have Now
 
 - Local privacy-first knowledge base
-- Fast semantic search (FAISS)
+- Hybrid retrieval: FAISS **+** BM25, fused with RRF
+- LLM query expansion with a safe fallback
+- Parallel search — accuracy without added latency
 - Intelligent tool use (MCP)
-- Maintainable Python code
-- Foundation for enterprise features
+- A benchmark to measure retrieval quality
 
 # 🙋 Quick Reference
 
 ```bash
+# Install deps (adds rank-bm25)
+pip install -r requirements.txt
+
 # Build index
 python main.py build-index
 
 # Run interactively
 python main.py
 
-# Check config
-cat config.py
+# Benchmark vector-only vs hybrid
+python bench.py            # needs bench_questions.json
 ```
 
 # 📚 Resources
 
-- **Code**: MobilaName/local-rag-mcp
 - **FAISS**: facebook/faiss
+- **rank-bm25**: dorianbrown/rank_bm25
+- **RRF paper**: Cormack et al., 2009
 - **Ollama**: ollama.ai
 - **FastMCP**: github.com/jlowin/fastmcp
 - **Transformers**: huggingface.co
