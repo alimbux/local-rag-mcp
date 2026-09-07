@@ -1,0 +1,16 @@
+[
+  {"question": "Кто отвечает за QA Review и кто в нём участвует?", "expected": "QA Review"},
+  {"question": "Когда и как использовать asyncpg для raw SQL запросов?", "expected": "asyncpg"},
+  {"question": "Как работает soft delete с окном 7 дней в Spaces API?", "expected": "spaces_endpoints"},
+  {"question": "Что такое Rate Limiting и какие параметры у декоратора?", "expected": "Rate Limiting"},
+  {"question": "Где хранятся ключи Render.com и когда они истекают?", "expected": "Сроки действия"},
+  {"question": "Какая миграционная политика для Alembic и проверка миграций в CI?", "expected": "migration_policy"},
+  {"question": "Какие обязанности у роли DevOps / CI-CD Engineer?", "expected": "DevOps"},
+  {"question": "Чем занимается Documentation Lead?", "expected": "Documentation Lead"},
+  {"question": "Как проходит Sprint Retrospective?", "expected": "Sprint Retrospective"},
+  {"question": "Как настроены инструменты качества кода Ruff и pre-commit?", "expected": "Ruff"},
+  {"question": "Что описывает процесс Backlog Refinement?", "expected": "Backlog Refinement"},
+  {"question": "Какой единый формат ошибок на бэкенде и почему без 422?", "expected": "Формат ошибок"},
+  {"question": "Как настроить прокси для локального запуска?", "expected": "Прокси"},
+  {"question": "За что отвечает слой shared в FSD-архитектуре фронтенда?", "expected": "Слой shared"}
+]
