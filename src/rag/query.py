@@ -141,10 +141,18 @@ def ask_llm(prompt):
         json={
             "model": OLLAMA_MODEL,
             "prompt": prompt,
-            "stream": False
+            "stream": False,
+            "think": False
         }
     )
-    return response.json()["response"]
+    data = response.json()
+    if "response" not in data:
+        # Ollama returns {"error": "..."} for e.g. a model that isn't pulled.
+        raise RuntimeError(
+            f"Ollama did not return a response for model '{OLLAMA_MODEL}': "
+            f"{data.get('error', data)}"
+        )
+    return data["response"]
 
 
 def ask(query: str):

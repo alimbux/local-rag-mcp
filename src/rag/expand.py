@@ -38,11 +38,15 @@ def _llm_raw(prompt: str) -> str:
             "model": OLLAMA_MODEL,
             "prompt": prompt,
             "stream": False,
+            "think": False,  # qwen3 etc. - skip the <think> block
             "options": {"temperature": EXPANSION_TEMPERATURE},
         },
         timeout=30,
     )
-    return response.json().get("response", "")
+    data = response.json()
+    if "error" in data:  # e.g. model not pulled - surface it to the caller
+        raise RuntimeError(data["error"])
+    return data.get("response", "")
 
 
 def _parse_keywords(text: str):
@@ -50,6 +54,9 @@ def _parse_keywords(text: str):
     text = text.strip()
     if not text:
         return []
+
+    # Drop a reasoning block if a thinking model emitted one anyway.
+    text = re.sub(r"<think>.*?</think>", " ", text, flags=re.DOTALL | re.IGNORECASE).strip()
 
     # Drop a markdown code fence if the model wrapped its answer in one.
     if text.startswith("```"):

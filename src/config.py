@@ -16,7 +16,7 @@ CHUNKS_PATH = "chunks.pkl"
 
 # Ollama configuration
 OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "qwen3:0.6b"
+OLLAMA_MODEL = "qwen3:1.7b"
 
 # RAG retrieval configuration
 TOP_K = 5  # final number of chunks passed to the LLM (after fusion)
